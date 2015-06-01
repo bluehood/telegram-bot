@@ -21,7 +21,10 @@ local Wikipedia = {
     redirects = ""
   },
   wiki_search_params = {
-    action = "opensearch",
+    action = "query",
+	 list = "search",
+    srlimit = 20,
+	 format = "json",
   },
 }
 
@@ -29,20 +32,27 @@ function Wikipedia:getWikiServer(lang)
   return self.wiki_server
 end
 
---[[
---  return decoded JSON table from Wikipedia
---]]
-function Wikipedia:loadPage(text, lang, intro, plain)
+function Wikipedia:loadPage(text, lang, intro, plain, is_search)
   local request, sink = {}, {}
   local query = ""
+  local parsed
 
-  self.wiki_load_params.explaintext = plain and "" or nil -- plain ? "" : nil
-  for k,v in pairs(self.wiki_load_params) do
-    query = query .. k .. '=' .. v .. '&'
+  if is_search then
+    for k,v in pairs(self.wiki_search_params) do
+      query = query .. k .. '=' .. v .. '&'
+    end
+    parsed = URL.parse(self:getWikiServer(lang))
+    parsed.path = self.wiki_path
+    parsed.query = query .. "srsearch=" .. URL.escape(text)
+  else
+    self.wiki_load_params.explaintext = plain and "" or nil
+    for k,v in pairs(self.wiki_load_params) do
+      query = query .. k .. '=' .. v .. '&'
+    end
+    parsed = URL.parse(self:getWikiServer(lang))
+    parsed.path = self.wiki_path
+    parsed.query = query .. "titles=" .. URL.escape(text)
   end
-  local parsed = URL.parse(self:getWikiServer(lang))
-  parsed.path = self.wiki_path
-  parsed.query = query .. "titles=" .. URL.escape(text)
 
   -- HTTP request
   request['url'] = URL.build(parsed)
@@ -94,61 +104,20 @@ function Wikipedia:wikintro(text, lang)
   end
 end
 
-function Wikipedia:loadSearchResults(text, lang)
-  local request, sink = {}, {}
-  local query = ""
-
-  for k,v in pairs(self.wiki_search_params) do
-    query = query .. k .. '=' .. v .. '&'
-  end
-  local parsed = URL.parse(self:getWikiServer(lang))
-  parsed.path = self.wiki_path
-  parsed.query = query .. "search=" .. URL.escape(text)
-
-  -- HTTP request
-  request['url'] = URL.build(parsed)
-  print(request['url'])
-  request['method'] = 'GET'
-  request['sink'] = ltn12.sink.table(sink)
-  
-  local httpRequest = parsed.scheme == 'http' and http.request or https.request
-  local code, headers, status = socket.skip(1, httpRequest(request))
-
-  if not headers or not sink then
-    return nil
-  end
-
-  local content = table.concat(sink)
-  if content ~= "" then
-    local ok, result = pcall(JSON.decode, content)
-    if ok and result then
-      return result
-    else
-      return nil
-    end
-  else 
-    return nil
-  end
-end
-
 -- search for term in wiki
 function Wikipedia:wikisearch(text, lang)
-  local result = self:loadSearchResults(text, lang)
+  local result = self:loadPage(text, lang, true, true, true)
 
-  if result and result[1] then
-    if result[2] and result[2][1] then
-	 	local pages = ""
-		for i,page in ipairs(result[2]) do
-        pages = pages .. "\n" .. page
-		end
-      return pages
-    else
-      return "No result found"
-    end
+  if result and result.query then
+    local titles = ""
+	 for i,item in pairs(result.query.search) do
+      titles = titles .. "\n" .. item["title"]
+	 end
+	 titles = titles ~= "" and titles or "No results found"
+	 return titles
   else
-    return "Sorry, an error happened"
+    return "Sorry, an error occurred"
   end
-  	
 end
 
 local function run(msg, matches)
